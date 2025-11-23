@@ -1,48 +1,166 @@
 <!DOCTYPE html>
 <html lang="en">
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<style>
-  html,body{margin:0;height:100%;background:#111;}
-  canvas{
-    display:block;
-    width:100vmin;              /* square on screen */
-    height:100vmin;
-    margin:0 auto;              /* centers horizontally */
-  }
-  .modal {
-    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-    background: #555; padding: 20px; border-radius: 10px;
-    display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
-    box-shadow: 0 0 20px gold; z-index: 10;
-  }
-  .modal button {
-    padding: 10px; background: #000; color: gold; border: none;
-    font-weight: bold; cursor: pointer; box-shadow: 0 0 10px gold;
-  }
-</style>
-<canvas id="c"></canvas>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EYEZ Generator</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #000;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #fff;
+    }
+    canvas {
+      display: block;
+      max-width: 100vw;
+      max-height: 100vh;
+      object-fit: contain;
+      cursor: pointer;
+    }
+
+    /* Overlay menu (same as Mandala) */
+    #overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.75);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+    }
+    #panel {
+      background: rgba(10,10,16,0.98);
+      border-radius: 16px;
+      padding: 1.5rem 1.8rem;
+      width: min(90vw, 420px);
+      box-shadow: 0 18px 60px rgba(0,0,0,0.9);
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    #panel h2 {
+      font-size: 1.1rem;
+      margin-bottom: 0.75rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #e3e7ff;
+    }
+    #panel p {
+      font-size: 0.8rem;
+      color: #a5aac4;
+      margin-bottom: 0.9rem;
+    }
+    .tag {
+      font-size: 0.7rem;
+      opacity: 0.7;
+      margin-bottom: 0.3rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+    button {
+      border: none;
+      border-radius: 999px;
+      padding: 0.45rem 0.85rem;
+      font-size: 0.8rem;
+      background: #181926;
+      color: #e9ecff;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
+      box-shadow: 0 0 0 rgba(0,0,0,0);
+    }
+    button:hover {
+      background: #25273a;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.6);
+      transform: translateY(-1px);
+    }
+    button.primary {
+      background: linear-gradient(135deg,#7bfff3,#ff6ad5);
+      color: #05060a;
+      font-weight: 600;
+    }
+    button.primary:hover {
+      background: linear-gradient(135deg,#9bfff7,#ff8af3);
+    }
+    button.outline {
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.18);
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="canvas"></canvas>
+
+<!-- Options overlay (identical layout/function to Mandala) -->
+<div id="overlay">
+  <div id="panel">
+    <div class="tag">Options</div>
+    <h2>Render &amp; Download</h2>
+    <p>Double-click the art to reopen this panel. Choose a resolution to redraw, or download the current frame.</p>
+    <div>
+      <div class="tag">Resolution</div>
+      <div class="row" id="resRow"></div>
+    </div>
+    <div class="row">
+      <button class="primary" id="downloadBtn">Download PNG</button>
+      <button class="outline" id="closeBtn">Close</button>
+    </div>
+  </div>
+</div>
+
 <script>
 (() => {
-  // ===== basics =====
+  // --- random helpers (kept) ---
   function rD(min,max) {
     return Math.random() * (max - min) + min;
   }
 
+  // --- resolution handling (exactly like Mandala) ---
+  const RESOLUTIONS = [1024, 2048, 4096, 8192, 16384];
+  let currentRes = 4096;
+
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+
+  let size = currentRes;  // square backing store
+  let cx = size / 2;
+  let cy = size / 2;
+
+  function setupCanvas(res) {
+    size = res;
+    canvas.width = size;
+    canvas.height = size;
+    cx = size / 2;
+    cy = size / 2;
+    canvas.style.width = '100vw';
+    canvas.style.height = '100vh';
+  }
+
+  // ===== original eye constants (drawing unchanged) =====
   const BG="#555", SCLERA_STROKE="#fff", PUPIL_FILL="#000", HIGHLIGHT="#fff", EDGE_COLOR="#000";
 
-  // will be randomized per draw
+  // look direction + pupil / sclera randomness will be re-randomized per redraw
   let LOOK_X = 0, LOOK_Y = 0;
 
   const THIN=0.18;                 // ellipse height factor
   const ASPECT=0.65;               // ellipse width factor (rx = ry*ASPECT)
   const SEP=2.175;                 // eye center separation (in rx units)
   const R0_RATIO=0.40, PR_RATIO=0.42;
-  const CANVAS_SIZE = 4096;        // 4K square backing store
   const EYE_SCALE   = 2.0;         // 2× bigger eyes
   const MARGIN_FRAC = 0.04;
 
-  // ==== seeded random (kept) ====
+  document.body.style.background = BG;
+
+  // ==== seeded random & stops (kept) ====
   let seed=(Date.now()^0x9E3779B9)>>>0;
   const reseed=()=>{seed=(seed+0x9E3779B9)>>>0;};
   const rand=()=>{
@@ -54,53 +172,47 @@
   };
   const randColor=()=>`hsl(${Math.floor(rand()*360)} 80% 60%)`;
 
-  // Pupil ring (thin annulus) & core
-  let RING_RIGHT, RING_LEFT;      // randomized per redraw
+  // Split point where inner bands (round) switch to oval rim
+  const RIM_START = 1;                   // 0..1
+
+  // Pupil ring (thin annulus) & core (colors randomized per redraw)
+  let RING_RIGHT, RING_LEFT;
 
   const RING_OUTER=1.18, RING_INNER=0.82;  // ring radii as multiples of pupil radius
   const CORE_RATIO=0.9;                   // black center radius vs pupil radius
 
   function highlightPosition(cx, cy, px, py, rx, ry, pr) {
-    // Relative pupil location inside the oval (normalized by rx/ry)
     const vx = (px - cx) / rx, vy = (py - cy) / ry;
-    const m  = Math.min(1, Math.hypot(vx, vy));      // 0..1 from center to edge
+    const m  = Math.min(1, Math.hypot(vx, vy));
 
-    // Direction from eye center to pupil (screen space)
     let ux = px - cx, uy = py - cy;
     let len = Math.hypot(ux, uy);
 
-    // If the pupil is dead-center, bias highlight gently up-left
     if (len === 0) return [px - pr * 0.22, py - pr * 0.22];
 
-    ux /= len; uy /= len;                              // unit direction
+    ux /= len; uy /= len;
 
-    // Place highlight along the same direction as the pupil:
-    // closer to center when pupil is centered, farther when pupil is off-center
-    const base = pr * (0.20 + 0.25 * m);              // 0.20..0.45 of pr
-
-    // Small jitter along the same direction (keeps it in the same quadrant)
-    const jitter = pr * 0.05 * (0.5 - rand());        // uses your seeded rand()
+    const base = pr * (0.20 + 0.25 * m);
+    const jitter = pr * 0.05 * (0.5 - rand());
     const hx = px + ux * (base + jitter);
     const hy = py + uy * (base + jitter);
 
     return [hx, hy];
   }
 
-  // Soft highlight
-  const HIGHLIGHT_RGBA_IN="rgba(255,255,255,0.9)";
-  const HIGHLIGHT_RGBA_OUT="rgba(255,255,255,0.0)";
-  const HL_RADIUS=0.375;    // as fraction of pupil radius
+  // Soft highlight controls
+  const HL_RADIUS=0.375;    // as fractions of pupil radius
 
-  // Precise control of the very outer oval rim (independent of sclera stops)
-  const OUTER_EDGE_GRAY="#4E4E4E"; // very subtle gray at rim
-  const RIM_WIDTH_FRAC   = .5;     // thickness as fraction of rx (try 0.05–0.15)
-  const RIM_FADE_FRACTION= .25;    // 0..1 how much of the ring gets the fade
-  const RIM_INNER_COLOR  = "#ffffff";      // main white eye
-  const RIM_OUTER_COLOR  = OUTER_EDGE_GRAY;// outside edge color
+  // Precise control of the very outer oval rim
+  const OUTER_EDGE_GRAY="#4E4E4E";
+  const RIM_WIDTH_FRAC   = .5;
+  const RIM_FADE_FRACTION= .25;
+  const RIM_INNER_COLOR  = "#ffffff";
+  const RIM_OUTER_COLOR  = OUTER_EDGE_GRAY;
 
-  const BORDER_FEATHER = 1;        // % of rx near edge used for the rim fade
-  const RIM_START = 1;             // split point (kept, even if outer stops unused)
+  const BORDER_FEATHER = 1;
 
+  // Sclera gradient stops
   const makeStops=()=>{
     const stops=[[0,randColor()]];
     const n=2+Math.floor(rand()*2);
@@ -116,12 +228,11 @@
     stops.push([1,EDGE_COLOR]);
     return stops;
   };
+  let GRADIENT_STOPS = makeStops();
 
-  let GRADIENT_STOPS = [];   // filled in by randomizeParams()
-
-  // ==== stop shaping helpers (kept) ====
-  let SCLERA_STOP_SPREADS = [];   // optional per-stop exponents
-  let SCLERA_GLOBAL_SPREAD = 1;   // overall exponent
+  // === stop shaping helpers (kept) ===
+  let SCLERA_STOP_SPREADS = [];
+  let SCLERA_GLOBAL_SPREAD = 1;
 
   function shapeStopsWithSpreads(stops, spreads, global=1){
     const shaped = stops.map(([p,c],i)=>{
@@ -130,12 +241,10 @@
       return [pp, c];
     }).sort((a,b)=>a[0]-b[0]);
 
-    // ensure anchors exist
     if (shaped[0][0] > 0) shaped.unshift([0, shaped[0][1]]);
     if (shaped[shaped.length-1][0] < 1) shaped.push([1, shaped[shaped.length-1][1]]);
     return shaped;
   }
-
   function colorAt(stops, t){
     let c = stops[0][1];
     for (let i=0;i<stops.length;i++){
@@ -144,7 +253,6 @@
     }
     return c;
   }
-
   function splitStops(stops, rimStart){
     const inner=[], outer=[];
     const rimColor = colorAt(stops, rimStart);
@@ -157,23 +265,16 @@
     return { inner, outer };
   }
 
-  const canvas=document.getElementById("c"), ctx=canvas.getContext("2d");
-  document.body.style.background=BG;
-
-  // colors used in sclera / rims (random per redraw)
+  // === Per-redraw random bundle (look, colors, stops) ===
   let st1, st1s, st2, st2s, st3, st3s;
 
-  // === randomization bundle: same art, new params ===
-  function randomizeParams(){
-    // look direction
+  function randomizeParams() {
     LOOK_X = rD(-.55,.55);
     LOOK_Y = rD(-.5,.5);
 
-    // sclera gradient stops
-    reseed();                      // step the seed; keeps it deterministic-ish
+    reseed();
     GRADIENT_STOPS = makeStops();
 
-    // shared color stops for sclera / rim
     st1  = randColor();
     st1s = rD(0,.3);
     st2  = randColor();
@@ -181,7 +282,6 @@
     st3  = randColor();
     st3s = rand();
 
-    // pupil ring colors
     RING_RIGHT = randColor();
     RING_LEFT  = (() => {
       const m = RING_RIGHT.match(/^hsl\(\s*([0-9.]+)\s+([0-9.]+)%\s+([0-9.]+)%\s*\)$/i);
@@ -194,31 +294,27 @@
     })();
   }
 
-  // === main draw (unchanged art) ===
-  function draw(){
-    // 4K square backing store so what you see == what you save
-    canvas.width  = CANVAS_SIZE;
-    canvas.height = CANVAS_SIZE;
+  // === main eye draw (your art, just made resolution-aware) ===
+  function draw() {
+    const W = size;
+    const H = size;
+    const U = size;
 
-    const W = CANVAS_SIZE, H = CANVAS_SIZE, U = CANVAS_SIZE;
     ctx.setTransform(1,0,0,1,0,0);
     ctx.clearRect(0,0,W,H);
 
-    // --- base eye geometry, then apply 2× scale, then auto-fit if needed ---
-    let ry = U * THIN * EYE_SCALE;       // make eyes taller by scale
-    let rx = ry * ASPECT;                // preserve shape/aspect
+    let ry = U * THIN * EYE_SCALE;
+    let rx = ry * ASPECT;
 
-    // ensure it fits inside square with a small margin
     const margin = U * MARGIN_FRAC;
-    const neededW = (2 + SEP) * rx;      // total width: left eye + gap + right eye
-    const neededH = 2 * ry;              // total height of an eye
+    const neededW = (2 + SEP) * rx;
+    const neededH = 2 * ry;
     let fit = Math.min(
       (W - 2*margin) / neededW,
       (H - 2*margin) / neededH
     );
-    if (fit < 1){ rx *= fit; ry *= fit; }  // only shrink if it would clip
+    if (fit < 1){ rx *= fit; ry *= fit; }
 
-    // centers
     const cy = H * 0.5;
     const sep = rx * SEP;
     const cx1 = W * 0.5 - sep * 0.5;
@@ -228,23 +324,21 @@
     ctx.lineWidth = outline;
     ctx.lineJoin = ctx.lineCap = "round";
 
-    // your existing stop shaping (unchanged)
     const shaped = shapeStopsWithSpreads(GRADIENT_STOPS, SCLERA_STOP_SPREADS, SCLERA_GLOBAL_SPREAD);
-    const { inner: innerStops /*, outer: outerStops (unused here)*/ } = splitStops(shaped, RIM_START);
+    const { inner: innerStops } = splitStops(shaped, RIM_START); // innerStops kept (matches original flow)
 
     const eye = (cx, cy) => {
       ctx.save();
       ctx.beginPath(); ctx.ellipse(cx,cy,rx,ry,0,0,Math.PI*2);
       ctx.clip();
 
-      // pupil geometry
       const pr = Math.min(rx,ry) * PR_RATIO;
       const px = cx + LOOK_X * rx * 0.8;
       const py = cy + LOOK_Y * ry * 0.8;
       const sPx = (px - cx);
       const sPy = (py - cy) * (rx / ry);
 
-      // --- inner (round) sclera ---
+      // inner sclera
       const gInner = ctx.createRadialGradient(px,py, pr*R0_RATIO, px,py, rx);
       gInner.addColorStop(st1s, st1);
       gInner.addColorStop(st2s, st2);
@@ -253,7 +347,7 @@
       ctx.globalAlpha = 1;
       ctx.fillRect(cx-rx, cy-ry, rx*2, ry*2);
 
-      // --- outer oval rim (thin ring) ---
+      // outer rim
       ctx.save();
       ctx.translate(cx,cy);
       ctx.scale(1, ry/rx);
@@ -266,8 +360,8 @@
 
       const fadeInner = rimOuter - (rimOuter - rimInner) * RIM_FADE_FRACTION;
       const gRim = ctx.createRadialGradient(
-        sPx, sPy, fadeInner,   // inner circle: follows pupil
-        0,   0,   rimOuter     // outer circle: fixed at rim center
+        sPx, sPy, fadeInner,
+        0,   0,   rimOuter
       );
       gRim.addColorStop(st1s, st1);
       gRim.addColorStop(st2s, st2);
@@ -276,7 +370,7 @@
       ctx.fillStyle = gRim;
       ctx.restore();
 
-      // --- outer feather (oval) ---
+      // outer feather
       ctx.save();
       ctx.beginPath(); ctx.ellipse(cx,cy,rx,ry,0,0,Math.PI*2);
       ctx.clip();
@@ -297,7 +391,7 @@
       ctx.fillRect(-rx,-rx,rx*2,rx*2);
       ctx.restore();
 
-      // --- pupil ring (diagonal) ---
+      // pupil ring
       const RING_GRAD_ANGLE = Math.PI/4;
       const rOuter = pr * RING_OUTER, rInner = pr * RING_INNER;
       const dx = Math.cos(RING_GRAD_ANGLE)*rOuter, dy = Math.sin(RING_GRAD_ANGLE)*rOuter;
@@ -318,11 +412,11 @@
       ctx.fillStyle = PUPIL_FILL;
       ctx.fill();
 
-      // highlight (follows pupil quadrant)
+      // highlight
       const [hx, hy] = highlightPosition(cx, cy, px, py, rx, ry, pr);
       const vxHL = (px - cx) / rx, vyHL = (py - cy) / ry;
       const mHL  = Math.min(1, Math.hypot(vxHL, vyHL));
-      const hlR  = pr * (HL_RADIUS * (0.9 + 0.2 * (1 - mHL))); // ~0.9x..1.1x
+      const hlR  = pr * (HL_RADIUS * (0.9 + 0.2 * (1 - mHL)));
 
       const gHL = ctx.createRadialGradient(hx, hy, 0, hx, hy, hlR);
       gHL.addColorStop(0, "rgba(255,255,255,0.92)");
@@ -332,106 +426,92 @@
       ctx.arc(hx, hy, hlR, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.restore(); // end clip
+      ctx.restore();
     };
 
     eye(W*0.5 - (rx*SEP)/2, cy);
     eye(W*0.5 + (rx*SEP)/2, cy);
   }
 
-  // === click redraw helper (Mandala-style) ===
-  function redraw(){
+  // Convenience: full redraw with new random params
+  function redraw() {
     randomizeParams();
     draw();
   }
 
-  // ===== resize & initial draw =====
-  randomizeParams();
-  addEventListener("resize", draw, {passive:true});
-  requestAnimationFrame(draw);
+  // --- CLICK HANDLING + OVERLAY (identical behavior to Mandala) ---
+  let clickTimer = null;
+  const overlay = document.getElementById('overlay');
+  const resRow = document.getElementById('resRow');
+  const downloadBtn = document.getElementById('downloadBtn');
+  const closeBtn = document.getElementById('closeBtn');
 
-  // ===== click / dblclick handling (pattern from Mandala) =====
-  let clickTimer=null;
-  canvas.addEventListener("click", () => {
+  function openOverlay() {
+    overlay.style.display = "flex";
+  }
+  function closeOverlay() {
+    overlay.style.display = "none";
+  }
+
+  canvas.addEventListener('click', () => {
     if (clickTimer) return;
     clickTimer = setTimeout(() => {
       clickTimer = null;
-      redraw();              // single click -> new random eyes
-    }, 260);
+      // single click -> new random eyes, same resolution
+      redraw();
+    }, 260); // small delay to detect double-click
   });
-  canvas.addEventListener("dblclick",(e)=>{
-    e.preventDefault();
+
+  canvas.addEventListener('dblclick', () => {
     if (clickTimer) {
       clearTimeout(clickTimer);
       clickTimer = null;
     }
-    showModal();             // double-click -> save modal
+    openOverlay();
   });
 
-  // ===== your existing save modal & scaler (kept) =====
-  function showModal() {
-    const options = ['1k','1kt','2k','2kt','3k','3kt','4k','4kt','8k','8kt','16k','16kt'];
-    const modal = document.createElement('div');
-    modal.className = 'modal';
-    const textColor = '#08d6ff';
-    modal.style.background = "#000";
-    modal.style.boxShadow = `0 0 10px ${textColor}`;
-    modal.addEventListener('click', (e)=>e.stopPropagation()); // prevent bubbling
+  overlay.addEventListener('click', e => {
+    if (e.target === overlay) closeOverlay();
+  });
 
-    options.forEach(opt => {
-      const btn = document.createElement('button');
-      btn.textContent = opt;
-      btn.onclick = (e) => {
-        e.stopPropagation();
-        document.body.removeChild(modal);
-        scaleCanvas(parseInt(opt), opt.includes('t'));
-      };
-      btn.style.background = "#000";
-      btn.style.color = textColor;
-      btn.style.boxShadow = `0 0 10px ${textColor}`;
-      modal.appendChild(btn);
+  // build resolution buttons
+  RESOLUTIONS.forEach(res => {
+    const btn = document.createElement('button');
+    btn.textContent = (res / 1024) + "K";
+    if (res === currentRes) {
+      btn.style.boxShadow = "0 0 0 1px rgba(255,255,255,0.4)";
+    }
+    btn.addEventListener('click', () => {
+      currentRes = res;
+      setupCanvas(currentRes);
+      redraw();
+      closeOverlay();
+      // update button highlighting
+      [...resRow.children].forEach(b => b.style.boxShadow = "0 0 0 rgba(0,0,0,0)");
+      btn.style.boxShadow = "0 0 0 1px rgba(255,255,255,0.4)";
     });
-    document.body.appendChild(modal);
-  }
+    resRow.appendChild(btn);
+  });
 
-  function scaleCanvas(multiplier, transparent) {
-    const targetSize = 1024 * multiplier;   // e.g. 4k -> 4096
-    const off = document.createElement('canvas');
-    off.width = targetSize; off.height = targetSize;
-    const octx = off.getContext('2d');
+  // download current canvas as PNG
+  downloadBtn.addEventListener('click', () => {
+    const link = document.createElement('a');
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    link.download = `eyez-${(currentRes / 1024)}k-${stamp}.png`;
+    link.href = canvas.toDataURL("image/png");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    closeOverlay();
+  });
 
-    if (!transparent) {
-      octx.fillStyle = '#000000';
-      octx.fillRect(0, 0, targetSize, targetSize);
-    }
-    octx.imageSmoothingEnabled = true;
-    octx.imageSmoothingQuality = 'high';
-    octx.drawImage(
-      canvas,
-      0, 0, canvas.width, canvas.height,   // full source (4096×4096)
-      0, 0, targetSize, targetSize         // full destination
-    );
+  closeBtn.addEventListener('click', closeOverlay);
 
-    const filename = `EYEZ_${multiplier}k_${transparent ? 'TP' : 'BLK'}.png`;
-    if (off.toBlob) {
-      off.toBlob(b => {
-        const a = document.createElement('a');
-        a.download = filename;
-        a.href = URL.createObjectURL(b);
-        document.body.appendChild(a);
-        a.click();
-        URL.revokeObjectURL(a.href);
-        document.body.removeChild(a);
-      }, 'image/png');
-    } else {
-      const a = document.createElement('a');
-      a.download = filename;
-      a.href = off.toDataURL('image/png');
-      a.click();
-    }
-  }
+  // --- INITIAL SETUP & DRAW ---
+  setupCanvas(currentRes);
+  redraw();
 
-  // === expose sclera tweak helpers (unchanged) ===
+  // === expose the same tweak helpers as before ===
   window.setScleraStopSpreads = (arr)=>{ SCLERA_STOP_SPREADS = Array.isArray(arr)?arr:[]; draw(); };
   window.setScleraGlobalSpread = (v)=>{ SCLERA_GLOBAL_SPREAD = +v || 1; draw(); };
   window.reseedSclera = ()=>{ reseed(); GRADIENT_STOPS = makeStops(); draw(); };
@@ -439,4 +519,5 @@
 })();
 </script>
 
+</body>
 </html>
