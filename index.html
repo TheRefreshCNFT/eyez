@@ -276,9 +276,9 @@
     GRADIENT_STOPS = makeStops();
 
     st1  = randColor();
-    st1s = rD(0,.3);
+    st1s = rD(0,.2);
     st2  = randColor();
-    st2s = rD(.3,.6);
+    st2s = rD(.2,.5);
     st3  = randColor();
     st3s = rand();
 
@@ -333,8 +333,8 @@
       ctx.clip();
 
       const pr = Math.min(rx,ry) * PR_RATIO;
-      const px = cx + LOOK_X * rx * 0.8;
-      const py = cy + LOOK_Y * ry * 0.8;
+      const px = cx + LOOK_X * rx * 0.66;
+      const py = cy + LOOK_Y * ry * 0.81;
       const sPx = (px - cx);
       const sPy = (py - cy) * (rx / ry);
 
@@ -342,7 +342,7 @@
       const gInner = ctx.createRadialGradient(px,py, pr*R0_RATIO, px,py, rx);
       gInner.addColorStop(st1s, st1);
       gInner.addColorStop(st2s, st2);
-      gInner.addColorStop(.7, '#ffffff');
+      gInner.addColorStop(.65, '#ffffff');
       ctx.fillStyle = gInner;
       ctx.globalAlpha = 1;
       ctx.fillRect(cx-rx, cy-ry, rx*2, ry*2);
