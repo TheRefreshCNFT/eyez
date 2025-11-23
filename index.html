@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  html,body{margin:0;height:100%;background:#111;}
+canvas{
+  display:block;
+  width:100vmin;              /* square on screen */
+  height:100vmin;
+  margin:0 auto;              /* centers horizontally */
+}
+      .modal {
+        position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+        background: #555; padding: 20px; border-radius: 10px;
+        display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
+        box-shadow: 0 0 20px gold; z-index: 10;
+    }
+    .modal button {
+        padding: 10px; background: #000; color: gold; border: none;
+        font-weight: bold; cursor: pointer; box-shadow: 0 0 10px gold;
+    }
+
+</style>
+<canvas id="c"></canvas>
+<script>
+(() => {
+  // ===== constants you already had (kept) =====
+
+  function rD(min,max) {
+	  return Math.random() * (max - min) + min;
+	}
+
+  lX = rD(-.55,.55);
+  lY = rD(-.5,.5);
+
+
+  const BG="#555", SCLERA_STROKE="#fff", PUPIL_FILL="#000", HIGHLIGHT="#fff", EDGE_COLOR="#000";
+  const LOOK_X=lX, LOOK_Y=lY;
+  const THIN=0.18;                 // ellipse height factor
+  const ASPECT=0.65;               // ellipse width factor (rx = ry*ASPECT)
+  const SEP=2.175;                     // eye center separation (in rx units)
+  const R0_RATIO=0.40, PR_RATIO=0.42;
+  const CANVAS_SIZE = 4096;     // 4K square backing store
+  const EYE_SCALE   = 2.0;      // 2× bigger eyes
+  const MARGIN_FRAC = 0.04; 
+
+    // ==== your seeded random & stop generator (kept) ====
+  let seed=(Date.now()^0x9E3779B9)>>>0;
+  const reseed=()=>{seed=(seed+0x9E3779B9)>>>0;};
+  const rand=()=>{seed|=0;seed=seed+0x6D2B79F5|0;let t=Math.imul(seed^seed>>>15,1|seed);t^=t+Math.imul(t^t>>>7,61|t);return ((t^t>>>14)>>>0)/4294967296;};
+  const randColor=()=>`hsl(${Math.floor(rand()*360)} 80% 60%)`;
+
+  // ===== new knobs for the look you described =====
+  // Oval border feather: subtle gray at very edge -> white just inside (both oval).
+  const OUTER_EDGE_GRAY="#4E4E4E"; // very subtle gray at rim
+  const BORDER_FEATHER = 1;              // % of rx near edge used for the rim fade
+
+  // Split point where inner bands (round) switch to oval rim
+  const RIM_START = 1;                   // 0..1; try 0.70–0.85
+
+  // Pupil ring (thin annulus) & core
+const RING_RIGHT = randColor();  // e.g. "hsl(123 80% 60%)"
+const RING_LEFT  = (() => {
+  // randColor() returns "hsl(H S% L%)" — make a darker shade by lowering L
+  const m = RING_RIGHT.match(/^hsl\(\s*([0-9.]+)\s+([0-9.]+)%\s+([0-9.]+)%\s*\)$/i);
+  if (m) {
+    const h = +m[1], s = +m[2], l = +m[3];
+    const darkL = Math.max(0, Math.min(100, l * 0.2)); // 55% of original lightness
+    return `hsl(${h} ${s}% ${darkL}%)`;
+  }
+  // Fallback: if format ever changes, just use the same color (no crashes)
+  return RING_RIGHT;
+})();
+
+  const RING_OUTER=1.18, RING_INNER=0.82;  // ring radii as multiples of pupil radius
+  const CORE_RATIO=0.9;                   // black center radius vs pupil radius
+
+  function highlightPosition(cx, cy, px, py, rx, ry, pr) {
+  // Relative pupil location inside the oval (normalized by rx/ry)
+  const vx = (px - cx) / rx, vy = (py - cy) / ry;
+  const m  = Math.min(1, Math.hypot(vx, vy));      // 0..1 from center to edge
+
+  // Direction from eye center to pupil (screen space)
+  let ux = px - cx, uy = py - cy;
+  let len = Math.hypot(ux, uy);
+
+  // If the pupil is dead-center, bias highlight gently up-left
+  if (len === 0) return [px - pr * 0.22, py - pr * 0.22];
+
+  ux /= len; uy /= len;                              // unit direction
+
+  // Place highlight along the same direction as the pupil:
+  // closer to center when pupil is centered, farther when pupil is off-center
+  const base = pr * (0.20 + 0.25 * m);              // 0.20..0.45 of pr
+
+  // Small jitter along the same direction (keeps it in the same quadrant)
+  const jitter = pr * 0.05 * (0.5 - rand());        // uses your seeded rand()
+  const hx = px + ux * (base + jitter);
+  const hy = py + uy * (base + jitter);
+
+  return [hx, hy];
+}
+
+
+
+  // Soft highlight (upper-left, on ring/core boundary)
+  const HIGHLIGHT_RGBA_IN="rgba(255,255,255,0.9)";
+  const HIGHLIGHT_RGBA_OUT="rgba(255,255,255,0.0)";
+  const HL_OFFSET=lY, HL_RADIUS=0.375;    // as fractions of pupil radius
+
+  // Precise control of the very outer oval rim (independent of sclera stops)
+const RIM_WIDTH_FRAC   = .5;           // thickness as fraction of rx (try 0.05–0.15)
+const RIM_FADE_FRACTION= .25;           // 0..1 how much of the ring gets the fade
+const RIM_INNER_COLOR  = "#ffffff";      // main white eye
+const RIM_OUTER_COLOR  = OUTER_EDGE_GRAY;// outside edge color (your red test)
+
+
+
+
+  const makeStops=()=>{
+    const stops=[[0,randColor()]];
+    const n=2+Math.floor(rand()*2);
+    for(let i=0;i<n;i++){let off=.05+rand()*.05;stops.push([off,'#ffffff']);}
+    stops.sort((a,b)=>a[0]-b[0]);
+    for(let i=1;i<stops.length;i++){ if(Math.abs(stops[i][0]-stops[i-1][0])<0.01) stops[i][0]=Math.min(0.99,stops[i-1][0]+0.01); }
+    stops.push([1,EDGE_COLOR]);
+    return stops;
+  };
+  let GRADIENT_STOPS=makeStops();  // <— your random stops stay
+
+  // ==== NEW: easy per-stop & global “spread” shaping (optional) ====
+  // Give each stop an exponent. 1 = unchanged, >1 pulls toward center, <1 pushes outward.
+  // If you don’t want shaping, leave this empty or all 1’s and it behaves like before.
+  let SCLERA_STOP_SPREADS = [];   // e.g. [1, 1.2, 0.9, 1]
+  let SCLERA_GLOBAL_SPREAD = 1; // overall bias (multiplies each per-stop spread)
+
+  function shapeStopsWithSpreads(stops, spreads, global=1){
+    const shaped = stops.map(([p,c],i)=>{
+      const e = (spreads[i] ?? 1) * (global ?? 1);
+      const pp = Math.max(0, Math.min(1, Math.pow(p, e)));
+      return [pp, c];
+    }).sort((a,b)=>a[0]-b[0]);
+
+    // ensure anchors exist
+    if (shaped[0][0] > 0) shaped.unshift([0, shaped[0][1]]);
+    if (shaped[shaped.length-1][0] < 1) shaped.push([1, shaped[shaped.length-1][1]]);
+    return shaped;
+  }
+  function colorAt(stops, t){
+    let c = stops[0][1];
+    for (let i=0;i<stops.length;i++){ if (stops[i][0] <= t) c = stops[i][1]; else break; }
+    return c;
+  }
+  function splitStops(stops, rimStart){
+    const inner=[], outer=[];
+    const rimColor = colorAt(stops, rimStart);
+    for (const [off,col] of stops){
+      if (off < rimStart) inner.push([off/rimStart, col]);
+      else                outer.push([(off-rimStart)/(1-rimStart), col]);
+    }
+    if (!inner.length || inner[inner.length-1][0] < 1) inner.push([1, rimColor]);
+    if (!outer.length || outer[0][0] > 0)              outer.unshift([0, rimColor]);
+    return { inner, outer };
+  }
+
+  // ===== canvas & draw =====
+  const canvas=document.getElementById("c"), ctx=canvas.getContext("2d");
+  document.body.style.background=BG;
+
+  const st1 = randColor();
+  const st1s = rD(0,.3);
+  const st2 = randColor();
+  const st2s = rD(.3,.6);
+  const st3 = randColor();
+  const st3s = rand();
+
+function draw(){
+  // 4K square backing store so what you see == what you save
+  canvas.width  = CANVAS_SIZE;
+  canvas.height = CANVAS_SIZE;
+
+  const W = CANVAS_SIZE, H = CANVAS_SIZE, U = CANVAS_SIZE;
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.clearRect(0,0,W,H);
+
+  // --- base eye geometry, then apply 2× scale, then auto-fit if needed ---
+  let ry = U * THIN * EYE_SCALE;       // make eyes taller by scale
+  let rx = ry * ASPECT;                // preserve shape/aspect
+
+  // ensure it fits inside square with a small margin
+  const margin = U * MARGIN_FRAC;
+  const neededW = (2 + SEP) * rx;      // total width: left eye + gap + right eye
+  const neededH = 2 * ry;              // total height of an eye
+  let fit = Math.min(
+    (W - 2*margin) / neededW,
+    (H - 2*margin) / neededH
+  );
+  if (fit < 1){ rx *= fit; ry *= fit; }  // only shrink if it would clip
+
+  // centers
+  const cy = H * 0.5;
+  const sep = rx * SEP;
+  const cx1 = W * 0.5 - sep * 0.5;
+  const cx2 = W * 0.5 + sep * 0.5;
+
+  const outline = Math.max(.5, U * 0.018);
+  ctx.lineWidth = outline;
+  ctx.lineJoin = ctx.lineCap = "round";
+
+  // your existing stop shaping (unchanged)
+  const shaped = shapeStopsWithSpreads(GRADIENT_STOPS, SCLERA_STOP_SPREADS, SCLERA_GLOBAL_SPREAD);
+  const { inner: innerStops /*, outer: outerStops (unused here)*/ } = splitStops(shaped, RIM_START);
+
+  const eye = (cx, cy) => {
+    ctx.save();
+    ctx.beginPath(); ctx.ellipse(cx,cy,rx,ry,0,0,Math.PI*2);
+    ctx.clip();
+
+    // pupil geometry
+    const pr = Math.min(rx,ry) * PR_RATIO;
+    const px = cx + LOOK_X * rx * 0.8;
+    const py = cy + LOOK_Y * ry * 0.8;
+    const sPx = (px - cx);
+    const sPy = (py - cy) * (rx / ry);
+
+    // --- inner (round) sclera ---
+    const gInner = ctx.createRadialGradient(px,py, pr*R0_RATIO, px,py, rx);
+    gInner.addColorStop(st1s, st1);
+    gInner.addColorStop(st2s, st2);
+    gInner.addColorStop(.7, '#ffffff');
+    ctx.fillStyle = gInner;
+    //ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = 1;
+    ctx.fillRect(cx-rx, cy-ry, rx*2, ry*2);
+    //ctx.globalCompositeOperation = 'source-over';
+
+    // --- outer oval rim (thin ring) ---
+    ctx.save();
+    ctx.translate(cx,cy);
+    ctx.scale(1, ry/rx);
+    const rimOuter = rx;
+    const rimInner = rx * (1 - RIM_WIDTH_FRAC);
+    ctx.beginPath();
+    ctx.arc(0,0,rimOuter,0,Math.PI*2);
+    ctx.arc(0,0,rimInner,0,Math.PI*2,true);
+    ctx.clip('evenodd');
+
+    const fadeInner = rimOuter - (rimOuter - rimInner) * RIM_FADE_FRACTION;
+    const gRim = ctx.createRadialGradient(
+      sPx, sPy, fadeInner,   // inner circle: follows pupil
+      0,   0,   rimOuter     // outer circle: fixed at rim center
+    );
+    // reuse your shared st1/st2/st3 from above
+    gRim.addColorStop(st1s, st1);
+    gRim.addColorStop(st2s, st2);
+    if (typeof st3 !== "undefined") gRim.addColorStop(st3s, st3);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = gRim;
+    //ctx.fillRect(-rimOuter, -rimOuter, rimOuter*2, rimOuter*2); //turn off and on oval gradient non stretched
+    //ctx.globalAlpha = 1;
+    ctx.restore();
+
+    // --- outer feather (oval) ---
+    ctx.save();
+    ctx.beginPath(); ctx.ellipse(cx,cy,rx,ry,0,0,Math.PI*2);
+    ctx.clip();
+    ctx.translate(cx,cy);
+    ctx.scale(1, ry/rx);
+    const edgeStart = rx * (1 - BORDER_FEATHER);
+    const gEdge  = ctx.createRadialGradient( sPx, sPy, edgeStart, 0, 0, rx );
+    gEdge.addColorStop(st1s, st1);
+    gEdge.addColorStop(st2s, st2);
+    gEdge.addColorStop(st3s, st3);
+    ctx.fillStyle = gEdge;
+    //ctx.fillRect(-rx,-rx,rx*2,rx*2); //turn off and on oval gradient stretched
+
+    ctx.globalCompositeOperation = 'source-over';
+    const gEdge1 = ctx.createRadialGradient( sPx, sPy, edgeStart, 0, 0, rx );
+    gEdge1.addColorStop(.85, 'transparent');
+    gEdge1.addColorStop(1, OUTER_EDGE_GRAY);
+    ctx.fillStyle = gEdge1;
+    ctx.fillRect(-rx,-rx,rx*2,rx*2);
+    ctx.restore();
+
+    // --- pupil ring (diagonal) ---
+    const RING_GRAD_ANGLE = Math.PI/4;
+    const rOuter = pr * RING_OUTER, rInner = pr * RING_INNER;
+    const dx = Math.cos(RING_GRAD_ANGLE)*rOuter, dy = Math.sin(RING_GRAD_ANGLE)*rOuter;
+    const lg = ctx.createLinearGradient(px-dx, py-dy, px+dx, py+dy);
+    lg.addColorStop(.2, RING_LEFT);
+    lg.addColorStop(1, RING_RIGHT);
+    ctx.beginPath();
+    ctx.arc(px,py,rOuter,0,Math.PI*2);
+    ctx.arc(px,py,rInner,0,Math.PI*2,true);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = lg;
+    ctx.fill("evenodd");
+
+    // core
+    ctx.beginPath();
+    ctx.arc(px, py, pr*CORE_RATIO, 0, Math.PI*2.2);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = PUPIL_FILL;
+    ctx.fill();
+
+    // highlight
+// highlight (follows pupil quadrant)
+const [hx, hy] = highlightPosition(cx, cy, px, py, rx, ry, pr);
+// slight size variation: a bit bigger when pupil is centered, smaller near edge
+const vxHL = (px - cx) / rx, vyHL = (py - cy) / ry;
+const mHL  = Math.min(1, Math.hypot(vxHL, vyHL));
+const hlR  = pr * (HL_RADIUS * (0.9 + 0.2 * (1 - mHL))); // ~0.9x..1.1x
+
+const gHL = ctx.createRadialGradient(hx, hy, 0, hx, hy, hlR);
+gHL.addColorStop(0, "rgba(255,255,255,0.92)");
+gHL.addColorStop(1, "rgba(255,255,255,0.00)");
+ctx.fillStyle = gHL;
+ctx.beginPath();
+ctx.arc(hx, hy, hlR, 0, Math.PI * 2);
+ctx.fill();
+
+
+    ctx.restore(); // end clip
+  };
+
+  eye(W*0.5 - (rx*SEP)/2, cy);
+  eye(W*0.5 + (rx*SEP)/2, cy);
+}
+
+
+  // ===== keep your click / dblclick save logic as-is (but unify to 'canvas') =====
+  addEventListener("resize",draw,{passive:true});
+  requestAnimationFrame(draw);
+
+  let clickTimer=null;
+  canvas.addEventListener("click",(e)=>{
+    if(e.detail===1){ clickTimer=setTimeout(()=>location.reload(),275); }
+  });
+  canvas.addEventListener("dblclick",(e)=>{
+    e.preventDefault();
+    clearTimeout(clickTimer);
+    showModal();
+  });
+
+  function showModal() {
+    const options = ['1k','1kt','2k','2kt','3k','3kt','4k','4kt','8k','8kt','16k','16kt'];
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    const textColor = '#08d6ff';
+    modal.style.background = "#000";
+    modal.style.boxShadow = `0 0 10px ${textColor}`;
+    modal.addEventListener('click', (e)=>e.stopPropagation()); // prevent bubbling
+
+    options.forEach(opt => {
+      const btn = document.createElement('button');
+      btn.textContent = opt;
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        document.body.removeChild(modal);
+        scaleCanvas(parseInt(opt), opt.includes('t'));
+      };
+      btn.style.background = "#000";
+      btn.style.color = textColor;
+      btn.style.boxShadow = `0 0 10px ${textColor}`;
+      modal.appendChild(btn);
+    });
+    document.body.appendChild(modal);
+  }
+
+function scaleCanvas(multiplier, transparent) {
+  const targetSize = 1024 * multiplier;   // e.g. 4k -> 4096
+  const off = document.createElement('canvas');
+  off.width = targetSize; off.height = targetSize;
+  const octx = off.getContext('2d');
+
+  if (!transparent) {
+    octx.fillStyle = '#000000';
+    octx.fillRect(0, 0, targetSize, targetSize);
+  }
+  octx.imageSmoothingEnabled = true;
+  octx.imageSmoothingQuality = 'high';
+  octx.drawImage(
+    canvas,
+    0, 0, canvas.width, canvas.height,   // full source (4096×4096)
+    0, 0, targetSize, targetSize         // full destination
+  );
+
+  const filename = `EYEZ_${multiplier}k_${transparent ? 'TP' : 'BLK'}.png`;
+  if (off.toBlob) {
+    off.toBlob(b => {
+      const a = document.createElement('a');
+      a.download = filename;
+      a.href = URL.createObjectURL(b);
+      document.body.appendChild(a);
+      a.click();
+      URL.revokeObjectURL(a.href);
+      document.body.removeChild(a);
+    }, 'image/png');
+  } else {
+    const a = document.createElement('a');
+    a.download = filename;
+    a.href = off.toDataURL('image/png');
+    a.click();
+  }
+}
+
+
+  // === expose tiny helpers to tweak at runtime (optional) ===
+  window.setScleraStopSpreads = (arr)=>{ SCLERA_STOP_SPREADS = Array.isArray(arr)?arr:[]; draw(); };
+  window.setScleraGlobalSpread = (v)=>{ SCLERA_GLOBAL_SPREAD = +v || 1; draw(); };
+  window.reseedSclera = ()=>{ reseed(); GRADIENT_STOPS = makeStops(); draw(); };
+
+})();
+</script>
+
+</html>
